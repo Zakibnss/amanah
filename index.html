@@ -1482,10 +1482,13 @@
       -webkit-backdrop-filter: blur(8px);
       backdrop-filter: blur(8px);
       box-shadow: 0 8px 20px rgba(61, 43, 27, 0.12);
+      font-family: inherit;
       font-size: 0.6rem;
       font-weight: 800;
       pointer-events: none;
-      transition: opacity 0.35s ease, transform 0.35s var(--ease);
+      -webkit-appearance: none;
+      appearance: none;
+      transition: opacity 0.35s ease, transform 0.35s var(--ease), border-color 0.3s ease;
     }
 
     .video-chip i {
@@ -1493,9 +1496,43 @@
       font-size: 0.52rem;
     }
 
+    .video-chip .fa-pause {
+      display: none;
+    }
+
+    .product-card.video-active .video-chip .fa-play {
+      display: none;
+    }
+
+    .product-card.video-active .video-chip .fa-pause {
+      display: inline-block;
+    }
+
     .product-card.video-active .video-chip {
       opacity: 0;
       transform: translateY(-6px);
+    }
+
+    /* على الشاشات اللمسية يصبح زر الفيديو ظاهراً وقابلاً للنقر */
+    @media (hover: none), (pointer: coarse) {
+      .video-chip {
+        pointer-events: auto;
+        cursor: pointer;
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      .product-card.video-active .video-chip {
+        opacity: 1;
+        transform: none;
+        border-color: rgba(46, 125, 50, 0.45);
+        background: rgba(255, 253, 248, 0.94);
+      }
+
+      .product-stage {
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+      }
     }
 
     .product-emoji {
@@ -4357,10 +4394,17 @@
           </span>
 
           ${product.video ? `
-            <span class="video-chip">
+            <button
+              class="video-chip"
+              type="button"
+              data-video-toggle
+              aria-label="تشغيل فيديو ${product.name}"
+              aria-pressed="false"
+            >
               <i class="fa-solid fa-play" aria-hidden="true"></i>
-              فيديو المنتج
-            </span>
+              <i class="fa-solid fa-pause" aria-hidden="true"></i>
+              <span data-video-label>فيديو المنتج</span>
+            </button>
           ` : ''}
 
           <div class="product-stage">
@@ -4467,22 +4511,40 @@
       });
     }
 
-    /* ---- تشغيل فيديو المنتج عند المرور على البطاقة ---- */
-    function pauseAllCardVideos() {
-      if (!productGrid) return;
+    /* ---- تشغيل فيديو المنتج: تمرير على الحاسوب، نقر على الهاتف ---- */
+    function syncVideoChip(card) {
+      const chip = card.querySelector('[data-video-toggle]');
+      if (!chip) return;
 
-      productGrid.querySelectorAll('.product-card.video-active').forEach((card) => {
-        card.classList.remove('video-active');
-      });
+      const active = card.classList.contains('video-active');
+      const nameEl = card.querySelector('.product-name');
+      const name = nameEl ? nameEl.textContent.trim() : 'المنتج';
+      const label = chip.querySelector('[data-video-label]');
 
-      productGrid.querySelectorAll('.product-video').forEach((video) => {
+      chip.setAttribute('aria-pressed', String(active));
+      chip.setAttribute('aria-label', `${active ? 'إيقاف' : 'تشغيل'} فيديو ${name}`);
+      if (label) label.textContent = active ? 'إيقاف الفيديو' : 'فيديو المنتج';
+    }
+
+    function resetCardVideo(card) {
+      const video = card.querySelector('.product-video');
+      card.classList.remove('video-active');
+
+      if (video) {
         if (!video.paused) video.pause();
         try {
           video.currentTime = 0;
         } catch (error) {
           /* تجاهل تعيين الوقت قبل جهوزية الفيديو */
         }
-      });
+      }
+
+      syncVideoChip(card);
+    }
+
+    function pauseAllCardVideos() {
+      if (!productGrid) return;
+      productGrid.querySelectorAll('.product-card.has-video').forEach(resetCardVideo);
     }
 
     function initProductVideos() {
@@ -4490,55 +4552,106 @@
 
       productGrid.querySelectorAll('.product-card.has-video').forEach((card) => {
         const video = card.querySelector('.product-video');
+        const stage = card.querySelector('.product-stage');
+        const chip = card.querySelector('[data-video-toggle]');
         if (!video) return;
 
         let hovered = false;
+        let tapped = false;
         let failed = false;
 
-        const stopVideo = () => {
-          card.classList.remove('video-active');
-          if (!video.paused) video.pause();
-          try {
-            video.currentTime = 0;
-          } catch (error) {
-            /* تجاهل تعيين الوقت قبل جهوزية الفيديو */
+        const startVideo = () => {
+          if (failed) return;
+
+          card.classList.add('video-active');
+          syncVideoChip(card);
+
+          const playPromise = video.play();
+
+          if (playPromise && typeof playPromise.catch === 'function') {
+            playPromise.catch(() => {
+              resetCardVideo(card);
+            });
           }
+        };
+
+        const stopVideo = () => {
+          tapped = false;
+          resetCardVideo(card);
+        };
+
+        const toggleTap = () => {
+          if (failed) return;
+
+          if (tapped && card.classList.contains('video-active')) {
+            stopVideo();
+            return;
+          }
+
+          pauseAllCardVideos();
+          tapped = true;
+          startVideo();
         };
 
         card.addEventListener('mouseenter', () => {
           if (!finePointer || reduceMotion || failed) return;
 
           hovered = true;
-          card.classList.add('video-active');
-
-          const playPromise = video.play();
-
-          if (playPromise && typeof playPromise.catch === 'function') {
-            playPromise.catch(() => {
-              if (hovered) card.classList.remove('video-active');
-            });
-          }
+          tapped = false;
+          startVideo();
         });
 
         card.addEventListener('mouseleave', () => {
           hovered = false;
-          stopVideo();
+          if (!tapped) resetCardVideo(card);
         });
 
+        /* النقر على مسرح الصورة يبدّل الفيديو على الهواتف */
+        if (stage) {
+          stage.addEventListener('click', (event) => {
+            if (finePointer || failed) return;
+            if (event.target.closest('button, a')) return;
+            toggleTap();
+          });
+        }
+
+        /* زر "فيديو المنتج" يعمل كزر تشغيل/إيقاف على الهواتف */
+        if (chip) {
+          chip.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (finePointer || failed) return;
+            toggleTap();
+          });
+        }
+
         video.addEventListener('playing', () => {
-          if (hovered) {
+          if (hovered || tapped) {
             card.classList.add('video-active');
+            syncVideoChip(card);
           } else {
-            stopVideo();
+            resetCardVideo(card);
           }
         });
 
         video.addEventListener('error', () => {
           failed = true;
           hovered = false;
+          tapped = false;
           card.classList.add('video-failed');
-          stopVideo();
+          resetCardVideo(card);
         });
+
+        /* إيقاف الفيديو تلقائياً عند خروج البطاقة من الشاشة على الهاتف */
+        if (!finePointer && hasIO) {
+          const videoObserver = new IntersectionObserver((entries) => {
+            entries.forEach((entry) => {
+              if (!entry.isIntersecting && tapped) stopVideo();
+            });
+          }, { threshold: 0.15 });
+
+          videoObserver.observe(card);
+        }
       });
     }
 
@@ -4610,6 +4723,8 @@
           video.src = nextVideo;
           video.load();
         }
+
+        syncVideoChip(card);
       }
 
       card.querySelectorAll('.variant-pill').forEach((pill, index) => {
